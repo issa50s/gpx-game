@@ -38,8 +38,8 @@ select, button, input {
 
   <select id="speedSelect">
     <option value="3.0">かなり速い</option>
-    <option value="2.0">速い</option>
-    <option value="1.0" selected>普通</option>
+    <option value="2.0" selected>速い</option>
+    <option value="1.0">普通</option>
     <option value="0.6">ゆっくり</option>
     <option value="0.2">観察モード</option>
   </select>
@@ -65,7 +65,7 @@ const ZOOM = 13;
 const PLAYER_SPEED = 1;
 
 let TILE_TYPE = "sekishoku";
-let speedScale = 0.25;
+let speedScale = 2.0;
 
 let points = [];
 let screenPoints = [];
@@ -250,6 +250,9 @@ function camPos(p, cameraX, cameraY) {
 }
 
 function drawText(text, x, y, size = 22, color = "white") {
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+
   ctx.fillStyle = color;
   ctx.font = `${size}px sans-serif`;
   ctx.fillText(text, x, y);
@@ -362,19 +365,16 @@ function draw() {
   ctx.arc(goal.x, goal.y, 12, 0, Math.PI * 2);
   ctx.fill();
 
-  // プレイヤー
+  // プレイヤー（ラン）
   const pp = camPos(player, cameraX, cameraY);
-  ctx.fillStyle = "white";
-  ctx.beginPath();
-  ctx.arc(pp.x, pp.y, 9, 0, Math.PI * 2);
-  ctx.fill();
 
-  ctx.strokeStyle = "black";
-  ctx.lineWidth = 2;
-  ctx.stroke();
+  ctx.font = "28px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("🏃", pp.x, pp.y);
 
   // UI
-  ctx.fillStyle = "rgba(0,0,0,0.1)";
+  ctx.fillStyle = "rgba(0,0,0,0.2)";
   ctx.fillRect(10, 10, 320, 135);
 
   const progress = Math.floor(playerIndex / (screenPoints.length - 1) * 100);
@@ -388,7 +388,7 @@ function draw() {
 
   // イベント表示
   if (messageTimer > 0) {
-    ctx.fillStyle = "rgba(0,0,0,0.1)";
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
     ctx.fillRect(220, HEIGHT - 80, 500, 50);
 
     drawText(message, 240, HEIGHT - 45, 18, "rgb(255,230,120)");
