@@ -1,0 +1,424 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>GPX追体験ゲーム HTML版</title>
+<style>
+body {
+  margin: 0;
+  background: #111;
+  color: white;
+  font-family: sans-serif;
+  text-align: center;
+}
+canvas {
+  border: 2px solid #333;
+  background: #222;
+}
+.controls {
+  margin: 10px;
+}
+</style>
+</head>
+<body>
+
+<h2>GPX追体験ゲーム HTML版</h2>
+
+<div class="controls">
+  <input type="file" id="gpxFile" accept=".gpx">
+  <button onclick="startGame()">START</button>
+  <p>SPACE長押し：停止 / GPXを選んでSTART</p>
+</div>
+
+<canvas id="game" width="1000" height="800"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const WIDTH = canvas.width;
+const HEIGHT = canvas.height;
+
+const ZOOM = 13;
+// const ZOOM = 15 標準地図
+// const ZOOM = 13 赤色立体地図
+const PLAYER_SPEED = 1;
+
+//　const TILE_URL = "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png";
+// 赤色立体地図にしたい場合はこちら
+const TILE_URL = "https://cyberjapandata.gsi.go.jp/xyz/sekishoku/{z}/{x}/{y}.png";
+
+let points = [];
+let screenPoints = [];
+let events = [];
+
+let playerIndex = 0;
+let hp = 1000;
+let message = "";
+let messageTimer = 0;
+let running = false;
+let spacePressed = false;
+let dynamicSpeed = 1;
+
+let bounds = null;
+
+document.addEventListener("keydown", e => {
+  if (e.code === "Space") spacePressed = true;
+});
+
+document.addEventListener("keyup", e => {
+  if (e.code === "Space") spacePressed = false;
+});
+
+function formatTime(date) {
+  if (!date) return "--:--:--";
+
+  const h = String(date.getHours()).padStart(2, "0");
+  const m = String(date.getMinutes()).padStart(2, "0");
+  const s = String(date.getSeconds()).padStart(2, "0");
+
+  return `${h}:${m}:${s}`;
+}
+
+function formatTime(date) {
+  if (!date) return "--:--:--";
+
+  const h = String(date.getHours()).padStart(2, "0");
+  const m = String(date.getMinutes()).padStart(2, "0");
+  const s = String(date.getSeconds()).padStart(2, "0");
+
+  return `${h}:${m}:${s}`;
+}
+
+function lonLatToPixel(lon, lat, z) {
+  const latRad = lat * Math.PI / 180;
+  const n = Math.pow(2, z);
+  const x = (lon + 180) / 360 * n * 256;
+  const y = (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) / 2 * n * 256;
+  return { x, y };
+}
+
+function pixelToTile(px, py) {
+  return {
+    x: Math.floor(px / 256),
+    y: Math.floor(py / 256)
+  };
+}
+
+function loadTile(z, x, y) {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+  img.src = TILE_URL
+    .replace("{z}", z)
+    .replace("{x}", x)
+    .replace("{y}", y);
+  return img;
+}
+
+const tileCache = {};
+
+function getTile(z, x, y) {
+  const key = `${z}_${x}_${y}`;
+  if (!tileCache[key]) {
+    tileCache[key] = loadTile(z, x, y);
+  }
+  return tileCache[key];
+}
+
+function parseGpx(text) {
+  const xml = new DOMParser().parseFromString(text, "application/xml");
+  const trkpts = [...xml.getElementsByTagName("trkpt")];
+
+  return trkpts.map(p => {
+    const lat = parseFloat(p.getAttribute("lat"));
+    const lon = parseFloat(p.getAttribute("lon"));
+
+    const eleNode = p.getElementsByTagName("ele")[0];
+    const timeNode = p.getElementsByTagName("time")[0];
+
+    return {
+      lat,
+      lon,
+      ele: eleNode ? parseFloat(eleNode.textContent) : 0,
+      time: timeNode ? new Date(timeNode.textContent) : null
+    };
+  });
+}
+
+function setupRoute() {
+  const lats = points.map(p => p.lat);
+  const lons = points.map(p => p.lon);
+
+  const minLat = Math.min(...lats);
+  const maxLat = Math.max(...lats);
+  const minLon = Math.min(...lons);
+  const maxLon = Math.max(...lons);
+
+  const latPad = (maxLat - minLat) * 0.15;
+  const lonPad = (maxLon - minLon) * 0.15;
+
+  bounds = {
+    minLat: minLat - latPad,
+    maxLat: maxLat + latPad,
+    minLon: minLon - lonPad,
+    maxLon: maxLon + lonPad
+  };
+
+  screenPoints = points.map(p => {
+    const pix = lonLatToPixel(p.lon, p.lat, ZOOM);
+    return pix;
+  });
+
+  makeEvents();
+}
+
+function makeEvents() {
+  events = [];
+
+  for (let i = 1; i < points.length; i++) {
+    const eleDiff = points[i].ele - points[i - 1].ele;
+
+    if (eleDiff > 5) {
+      events.push({ index: i, message: "登り坂イベント：体力 -1" });
+    } else if (eleDiff < -5) {
+      events.push({ index: i, message: "下り坂イベント：速度注意" });
+    }
+
+    if (points[i].time && points[i - 1].time) {
+      const dt = (points[i].time - points[i - 1].time) / 1000;
+      if (dt > 30) {
+        events.push({ index: i, message: "観察イベント：ここで停止しました" });
+      }
+    }
+  }
+
+  const filtered = [];
+  let last = -999;
+
+  for (const e of events) {
+    if (e.index - last > 100) {
+      filtered.push(e);
+      last = e.index;
+    }
+  }
+
+  events = filtered;
+}
+
+function drawMap(cameraX, cameraY) {
+  const startTile = pixelToTile(cameraX, cameraY);
+  const endTile = pixelToTile(cameraX + WIDTH, cameraY + HEIGHT);
+
+  for (let tx = startTile.x; tx <= endTile.x; tx++) {
+    for (let ty = startTile.y; ty <= endTile.y; ty++) {
+      const img = getTile(ZOOM, tx, ty);
+      const dx = tx * 256 - cameraX;
+      const dy = ty * 256 - cameraY;
+      ctx.drawImage(img, dx, dy, 256, 256);
+    }
+  }
+}
+
+function camPos(p, cameraX, cameraY) {
+  return {
+    x: p.x - cameraX,
+    y: p.y - cameraY
+  };
+}
+
+function drawText(text, x, y, size = 22, color = "white") {
+  ctx.fillStyle = color;
+  ctx.font = `${size}px sans-serif`;
+  ctx.fillText(text, x, y);
+}
+
+function update() {
+  if (!running) return;
+
+  if (!spacePressed) {
+
+    // 次のポイントとの差を使う
+    let i = Math.floor(playerIndex);
+
+    if (i < points.length - 1 && points[i].time && points[i + 1].time) {
+
+      let dt = (points[i + 1].time - points[i].time) / 1000;
+
+      // 異常値対策
+      if (dt <= 0) dt = 1;
+      if (dt > 10) dt = 10;
+
+      // スピード計算（ここがコア）
+      dynamicSpeed = (1 / dt * 5) * 1;
+
+    } else {
+      dynamicSpeed = 1;
+    }
+
+    playerIndex += dynamicSpeed;
+  }
+
+  if (playerIndex >= screenPoints.length - 1) {
+    playerIndex = screenPoints.length - 1;
+  }
+
+  for (const e of events) {
+    if (Math.abs(playerIndex - e.index) < PLAYER_SPEED) {
+      message = e.message;
+      messageTimer = 90;
+
+      if (e.message.includes("登り坂")) {
+        hp -= 1;
+      }
+    }
+  }
+
+  if (messageTimer > 0) messageTimer--;
+
+  if (hp <= 0) {
+    running = false;
+    message = "体力切れ……";
+    messageTimer = 9999;
+  }
+
+  if (playerIndex >= screenPoints.length - 1) {
+    running = false;
+    message = "GOAL！追体験完了";
+    messageTimer = 9999;
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+  if (screenPoints.length === 0) {
+    drawText("GPXファイルを選んでSTARTしてください", 300, 380, 26);
+    return;
+  }
+
+  const player = screenPoints[Math.floor(playerIndex)];
+
+  let cameraX = player.x - WIDTH / 2;
+  let cameraY = player.y - HEIGHT / 2;
+
+  drawMap(cameraX, cameraY);
+
+  // ルート全体
+  ctx.strokeStyle = "rgb(70,70,70)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+
+  screenPoints.forEach((p, i) => {
+    const cp = camPos(p, cameraX, cameraY);
+    if (i === 0) ctx.moveTo(cp.x, cp.y);
+    else ctx.lineTo(cp.x, cp.y);
+  });
+
+  ctx.stroke();
+
+  // 通過済みルート
+  ctx.strokeStyle = "rgb(0,120,255)";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+
+  for (let i = 0; i <= Math.floor(playerIndex); i++) {
+    const cp = camPos(screenPoints[i], cameraX, cameraY);
+    if (i === 0) ctx.moveTo(cp.x, cp.y);
+    else ctx.lineTo(cp.x, cp.y);
+  }
+
+  ctx.stroke();
+
+  // スタート
+  let start = camPos(screenPoints[0], cameraX, cameraY);
+  ctx.fillStyle = "rgb(0,180,60)";
+  ctx.beginPath();
+  ctx.arc(start.x, start.y, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ゴール
+  let goal = camPos(screenPoints[screenPoints.length - 1], cameraX, cameraY);
+  ctx.fillStyle = "rgb(230,180,0)";
+  ctx.beginPath();
+  ctx.arc(goal.x, goal.y, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  // プレイヤー
+  const pp = camPos(player, cameraX, cameraY);
+  ctx.fillStyle = "white";
+  ctx.beginPath();
+  ctx.arc(pp.x, pp.y, 9, 0, Math.PI * 2);
+  ctx.fill();
+
+  ctx.strokeStyle = "black";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // UI
+  ctx.fillStyle = "rgba(0,0,0,0.75)";
+  ctx.fillRect(10, 10, 290, 105);
+
+  const progress = Math.floor(playerIndex / (screenPoints.length - 1) * 100);
+
+  // ★ここ追加
+  let i = Math.floor(playerIndex);
+  let currentTime = points[i]?.time;
+
+  // 表示
+
+  drawText(`進行率: ${progress}%`, 25, 40);
+  drawText(`体力: ${hp}`, 25, 70);
+  drawText("SPACE長押し：停止", 25, 100);
+
+  // ★ここ追加
+  drawText(`時刻: ${formatTime(currentTime)}`, 25, 130, 22, "black");
+
+  if (messageTimer > 0) {
+    ctx.fillStyle = "rgba(0,0,0,0.7)";
+    ctx.fillRect(220, HEIGHT - 80, 500, 50);
+
+    drawText(message, 240, HEIGHT - 45, 18, "rgb(255,230,120)");
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function startGame() {
+  const file = document.getElementById("gpxFile").files[0];
+
+  if (!file) {
+    alert("GPXファイルを選んでください");
+    return;
+  }
+
+  const reader = new FileReader();
+
+  reader.onload = e => {
+    points = parseGpx(e.target.result);
+
+    if (points.length < 2) {
+      alert("GPXポイントが少なすぎます");
+      return;
+    }
+
+    setupRoute();
+
+    playerIndex = 0;
+    hp = 1000;
+    message = "";
+    messageTimer = 0;
+    running = true;
+  };
+
+  reader.readAsText(file);
+}
+
+loop();
+</script>
+
+</body>
+</html>
