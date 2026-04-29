@@ -374,7 +374,7 @@ function draw() {
   ctx.stroke();
 
   // UI
-  ctx.fillStyle = "rgba(0,0,0,0.2)";
+  ctx.fillStyle = "rgba(0,0,0,0.1)";
   ctx.fillRect(10, 10, 320, 135);
 
   const progress = Math.floor(playerIndex / (screenPoints.length - 1) * 100);
@@ -388,7 +388,7 @@ function draw() {
 
   // イベント表示
   if (messageTimer > 0) {
-    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.fillStyle = "rgba(0,0,0,0.1)";
     ctx.fillRect(220, HEIGHT - 80, 500, 50);
 
     drawText(message, 240, HEIGHT - 45, 18, "rgb(255,230,120)");
