@@ -45,6 +45,7 @@ select, button, input {
   </select>
 
   <button onclick="startGame()">START</button>
+  <button onclick="loadSample()">サンプル再生</button>
 
   <p>SPACE長押し：停止 / GPXを選んでSTART</p>
 </div>
@@ -400,6 +401,22 @@ function loop() {
   requestAnimationFrame(loop);
 }
 
+function loadSample() {
+  fetch("sample.gpx")
+    .then(res => res.text())
+    .then(text => {
+      points = parseGpx(text);
+
+      setupRoute();
+
+      playerIndex = 0;
+      hp = 1000;
+      message = "";
+      messageTimer = 0;
+      running = true;
+    });
+}
+
 function startGame() {
   const file = document.getElementById("gpxFile").files[0];
 
@@ -435,7 +452,41 @@ function startGame() {
   reader.readAsText(file);
 }
 
+function loadSample() {
+  fetch("sample.gpx")
+    .then(res => {
+      if (!res.ok) {
+        throw new Error("sample.gpx が見つかりません");
+      }
+      return res.text();
+    })
+    .then(text => {
+      points = parseGpx(text);
+
+      if (points.length < 2) {
+        alert("サンプルGPXが不正です");
+        return;
+      }
+
+      setupRoute();
+
+      playerIndex = 0;
+      hp = 1000;
+      message = "";
+      messageTimer = 0;
+      running = true;
+    })
+    .catch(err => {
+      alert("サンプルGPXを読み込めません: " + err.message);
+      console.error(err);
+    });
+}
 loop();
+
+window.onload = () => {
+  loadSample();
+};
+
 </script>
 
 </body>
