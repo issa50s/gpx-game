@@ -1,0 +1,558 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<title>GPX追体験ゲーム HTML版</title>
+<style>
+body {
+  margin: 0;
+  background: #111;
+  color: white;
+  font-family: sans-serif;
+  text-align: center;
+}
+canvas {
+  border: 2px solid #333;
+  background: #222;
+}
+.controls {
+  margin: 10px;
+}
+select, button, input {
+  font-size: 16px;
+  margin: 4px;
+}
+</style>
+</head>
+<body>
+
+<h2>GPX追体験ゲーム HTML版</h2>
+
+<div class="controls">
+  <input type="file" id="gpxFile" accept=".gpx">
+
+<select id="mapSelect">
+  <option value="std">標準地図</option>
+  <option value="sekishoku" selected>赤色立体地図</option>
+  <option value="photo">航空写真</option>
+</-- <option value="rapid">迅速測図</option> -->
+</select>
+
+<select id="zoomSelect">
+  <option value="12">ズーム12 広域</option>
+  <option value="13" selected>ズーム13 標準</option>
+  <option value="14">ズーム14 詳細</option>
+  <option value="15">ズーム15 かなり詳細</option>
+  <option value="16">ズーム16 超詳細</option>
+</select>
+
+<select id="speedSelect">
+  <option value="3.0">かなり速い</option>
+  <option value="2.0" selected>速い</option>
+  <option value="1.0">普通</option>
+  <option value="0.6">ゆっくり</option>
+  <option value="0.2">観察モード</option>
+</select>
+
+  <button onclick="startGame()">START</button>
+  <button onclick="loadSample()">サンプル再生</button>
+
+  <p>SPACE長押し：停止 / GPXを選んでSTART</p>
+</div>
+
+<canvas id="game" width="1000" height="800"></canvas>
+
+<script>
+const canvas = document.getElementById("game");
+const ctx = canvas.getContext("2d");
+
+const WIDTH = canvas.width;
+const HEIGHT = canvas.height;
+
+// 赤色立体地図は13〜14くらいが安定しやすい
+let ZOOM = 13;
+
+const PLAYER_SPEED = 1;
+
+let TILE_TYPE = "sekishoku";
+let speedScale = 2.0;
+
+let points = [];
+let screenPoints = [];
+let events = [];
+
+let playerIndex = 0;
+let hp = 1000;
+let message = "";
+let messageTimer = 0;
+let running = false;
+let spacePressed = false;
+let dynamicSpeed = 1;
+
+document.getElementById("mapSelect").addEventListener("change", e => {
+  TILE_TYPE = e.target.value;
+
+  Object.keys(tileCache).forEach(k => delete tileCache[k]);
+
+  updateZoomOptions();
+
+  if (points.length >= 2) {
+    setupRoute();   // ←これ追加（重要）
+  }
+});
+
+document.getElementById("speedSelect").addEventListener("change", e => {
+  speedScale = parseFloat(e.target.value);
+});
+
+  updateZoomOptions(); // ←これ追加
+
+document.addEventListener("keydown", e => {
+  if (e.code === "Space") spacePressed = true;
+});
+
+document.addEventListener("keyup", e => {
+  if (e.code === "Space") spacePressed = false;
+});
+
+function getTileUrl() {
+  if (TILE_TYPE === "std") {
+    return "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png";
+  } else if (TILE_TYPE === "sekishoku") {
+    return "https://cyberjapandata.gsi.go.jp/xyz/sekishoku/{z}/{x}/{y}.png";
+  } else if (TILE_TYPE === "photo") {
+    return "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg";
+//  } else if (TILE_TYPE === "rapid") {
+//    return "https://aginfo.cgk.affrc.go.jp/ws/tmc/1.0.0/Kanto_Rapid-900913-L/{z}/{x}/{y}.png";
+  }
+}
+
+function updateZoomOptions() {
+  const zoomSelect = document.getElementById("zoomSelect");
+
+  for (let option of zoomSelect.options) {
+    const z = parseInt(option.value);
+
+    if (TILE_TYPE === "sekishoku") {
+      // 赤色立体 → 14まで
+      option.disabled = (z > 14 || z < 12);
+    } else {
+      // 標準・航空写真 → 12〜16のみ
+      option.disabled = (z < 12 || z > 16);
+    }
+  }
+
+  // 範囲外なら強制補正
+  if (TILE_TYPE === "sekishoku" && ZOOM > 14) {
+    ZOOM = 14;
+    zoomSelect.value = "14";
+  }
+
+  if ((TILE_TYPE === "std" || TILE_TYPE === "photo") && ZOOM < 12) {
+    ZOOM = 12;
+    zoomSelect.value = "12";
+  }
+
+  if ((TILE_TYPE === "std" || TILE_TYPE === "photo") && ZOOM > 16) {
+    ZOOM = 16;
+    zoomSelect.value = "16";
+  }
+}
+
+document.getElementById("zoomSelect").addEventListener("change", e => {
+  ZOOM = parseInt(e.target.value);
+
+  Object.keys(tileCache).forEach(k => delete tileCache[k]);
+
+  if (points.length >= 2) {
+    setupRoute();
+  }
+});
+
+function formatTime(date) {
+  if (!date) return "--:--:--";
+
+  const h = String(date.getHours()).padStart(2, "0");
+  const m = String(date.getMinutes()).padStart(2, "0");
+  const s = String(date.getSeconds()).padStart(2, "0");
+
+  return `${h}:${m}:${s}`;
+}
+
+function lonLatToPixel(lon, lat, z) {
+  const latRad = lat * Math.PI / 180;
+  const n = Math.pow(2, z);
+
+  const x = (lon + 180) / 360 * n * 256;
+  const y =
+    (1 - Math.log(Math.tan(latRad) + 1 / Math.cos(latRad)) / Math.PI) /
+    2 * n * 256;
+
+  return { x, y };
+}
+
+function pixelToTile(px, py) {
+  return {
+    x: Math.floor(px / 256),
+    y: Math.floor(py / 256)
+  };
+}
+
+function loadTile(z, x, y) {
+  const img = new Image();
+  img.crossOrigin = "anonymous";
+
+  const url = getTileUrl()
+    .replace("{z}", z)
+    .replace("{x}", x)
+    .replace("{y}", y);
+
+  img.src = url;
+  return img;
+}
+
+const tileCache = {};
+
+function getTile(z, x, y) {
+  const key = `${TILE_TYPE}_${z}_${x}_${y}`;
+
+  if (!tileCache[key]) {
+    tileCache[key] = loadTile(z, x, y);
+  }
+
+  return tileCache[key];
+}
+
+function parseGpx(text) {
+  const xml = new DOMParser().parseFromString(text, "application/xml");
+  const trkpts = [...xml.getElementsByTagName("trkpt")];
+
+  return trkpts.map(p => {
+    const lat = parseFloat(p.getAttribute("lat"));
+    const lon = parseFloat(p.getAttribute("lon"));
+
+    const eleNode = p.getElementsByTagName("ele")[0];
+    const timeNode = p.getElementsByTagName("time")[0];
+
+    return {
+      lat,
+      lon,
+      ele: eleNode ? parseFloat(eleNode.textContent) : 0,
+      time: timeNode ? new Date(timeNode.textContent) : null
+    };
+  });
+}
+
+function setupRoute() {
+  screenPoints = points.map(p => {
+    return lonLatToPixel(p.lon, p.lat, ZOOM);
+  });
+
+  makeEvents();
+}
+
+function makeEvents() {
+  events = [];
+
+  for (let i = 1; i < points.length; i++) {
+    const eleDiff = points[i].ele - points[i - 1].ele;
+
+    if (eleDiff > 5) {
+      events.push({ index: i, message: "登り坂イベント：体力 -1" });
+    } else if (eleDiff < -5) {
+      events.push({ index: i, message: "下り坂イベント：速度注意" });
+    }
+
+    if (points[i].time && points[i - 1].time) {
+      const dt = (points[i].time - points[i - 1].time) / 1000;
+
+      if (dt > 30) {
+        events.push({ index: i, message: "観察イベント：ここで停止しました" });
+      }
+    }
+  }
+
+  const filtered = [];
+  let last = -999;
+
+  for (const e of events) {
+    if (e.index - last > 100) {
+      filtered.push(e);
+      last = e.index;
+    }
+  }
+
+  events = filtered;
+}
+
+function drawMap(cameraX, cameraY) {
+  const startTile = pixelToTile(cameraX, cameraY);
+  const endTile = pixelToTile(cameraX + WIDTH, cameraY + HEIGHT);
+
+  for (let tx = startTile.x; tx <= endTile.x; tx++) {
+    for (let ty = startTile.y; ty <= endTile.y; ty++) {
+      const img = getTile(ZOOM, tx, ty);
+
+      const dx = tx * 256 - cameraX;
+      const dy = ty * 256 - cameraY;
+
+      try {
+        ctx.drawImage(img, dx, dy, 256, 256);
+      } catch (e) {
+        // 読み込み前は描画しない
+      }
+    }
+  }
+}
+
+function camPos(p, cameraX, cameraY) {
+  return {
+    x: p.x - cameraX,
+    y: p.y - cameraY
+  };
+}
+
+function drawText(text, x, y, size = 22, color = "white") {
+  ctx.textAlign = "left";
+  ctx.textBaseline = "alphabetic";
+
+  ctx.fillStyle = color;
+  ctx.font = `${size}px sans-serif`;
+  ctx.fillText(text, x, y);
+}
+
+function update() {
+  if (!running) return;
+
+  if (!spacePressed) {
+    let i = Math.floor(playerIndex);
+
+    if (i < points.length - 1 && points[i].time && points[i + 1].time) {
+      let dt = (points[i + 1].time - points[i].time) / 1000;
+
+      if (dt <= 0) dt = 1;
+      if (dt > 10) dt = 10;
+
+      dynamicSpeed = (1 / dt * 5) * speedScale;
+    } else {
+      dynamicSpeed = 1 * speedScale;
+    }
+
+    playerIndex += dynamicSpeed;
+  }
+
+  if (playerIndex >= screenPoints.length - 1) {
+    playerIndex = screenPoints.length - 1;
+  }
+
+  for (const e of events) {
+    if (Math.abs(playerIndex - e.index) < Math.max(dynamicSpeed, 1)) {
+      message = e.message;
+      messageTimer = 90;
+
+      if (e.message.includes("登り坂")) {
+        hp -= 1;
+      }
+    }
+  }
+
+  if (messageTimer > 0) messageTimer--;
+
+  if (hp <= 0) {
+    running = false;
+    message = "体力切れ……";
+    messageTimer = 9999;
+  }
+
+  if (playerIndex >= screenPoints.length - 1) {
+    running = false;
+    message = "GOAL！追体験完了";
+    messageTimer = 9999;
+  }
+}
+
+function draw() {
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+
+  if (screenPoints.length === 0) {
+    drawText("GPXファイルを選んでSTARTしてください", 300, 380, 26);
+    return;
+  }
+
+  const player = screenPoints[Math.floor(playerIndex)];
+
+  let cameraX = player.x - WIDTH / 2;
+  let cameraY = player.y - HEIGHT / 2;
+
+  drawMap(cameraX, cameraY);
+
+  // ルート全体
+  ctx.strokeStyle = "rgb(70,70,70)";
+  ctx.lineWidth = 3;
+  ctx.beginPath();
+
+  screenPoints.forEach((p, i) => {
+    const cp = camPos(p, cameraX, cameraY);
+
+    if (i === 0) ctx.moveTo(cp.x, cp.y);
+    else ctx.lineTo(cp.x, cp.y);
+  });
+
+  ctx.stroke();
+
+  // 通過済みルート
+  ctx.strokeStyle = "rgb(0,120,255)";
+  ctx.lineWidth = 5;
+  ctx.beginPath();
+
+  for (let i = 0; i <= Math.floor(playerIndex); i++) {
+    const cp = camPos(screenPoints[i], cameraX, cameraY);
+
+    if (i === 0) ctx.moveTo(cp.x, cp.y);
+    else ctx.lineTo(cp.x, cp.y);
+  }
+
+  ctx.stroke();
+
+  // スタート
+  const start = camPos(screenPoints[0], cameraX, cameraY);
+  ctx.fillStyle = "rgb(0,180,60)";
+  ctx.beginPath();
+  ctx.arc(start.x, start.y, 10, 0, Math.PI * 2);
+  ctx.fill();
+
+  // ゴール
+  const goal = camPos(screenPoints[screenPoints.length - 1], cameraX, cameraY);
+  ctx.fillStyle = "rgb(230,180,0)";
+  ctx.beginPath();
+  ctx.arc(goal.x, goal.y, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  // プレイヤー（ラン）
+  const pp = camPos(player, cameraX, cameraY);
+
+  ctx.font = "28px sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("🏃", pp.x, pp.y);
+
+  // UI
+  ctx.fillStyle = "rgba(0,0,0,0.2)";
+  ctx.fillRect(10, 10, 320, 135);
+
+  const progress = Math.floor(playerIndex / (screenPoints.length - 1) * 100);
+  const i = Math.floor(playerIndex);
+  const currentTime = points[i]?.time;
+
+  drawText(`進行率: ${progress}%`, 25, 40);
+  drawText(`体力: ${hp}`, 25, 70);
+  drawText("SPACE長押し：停止", 25, 100);
+  drawText(`時刻: ${formatTime(currentTime)}`, 25, 130, 22, "white");
+
+  // イベント表示
+  if (messageTimer > 0) {
+    ctx.fillStyle = "rgba(0,0,0,0.2)";
+    ctx.fillRect(220, HEIGHT - 80, 500, 50);
+
+    drawText(message, 240, HEIGHT - 45, 18, "rgb(255,230,120)");
+  }
+}
+
+function loop() {
+  update();
+  draw();
+  requestAnimationFrame(loop);
+}
+
+function loadSample() {
+  fetch("20260502.gpx")
+    .then(res => res.text())
+    .then(text => {
+      points = parseGpx(text);
+
+      setupRoute();
+
+      playerIndex = 0;
+      hp = 1000;
+      message = "";
+      messageTimer = 0;
+      running = true;
+    });
+}
+
+function startGame() {
+  const file = document.getElementById("gpxFile").files[0];
+
+  if (!file) {
+    alert("GPXファイルを選んでください");
+    return;
+  }
+
+  TILE_TYPE = document.getElementById("mapSelect").value;
+  speedScale = parseFloat(document.getElementById("speedSelect").value);
+  ZOOM = parseInt(document.getElementById("zoomSelect").value);
+
+  Object.keys(tileCache).forEach(k => delete tileCache[k]);
+
+  const reader = new FileReader();
+
+  reader.onload = e => {
+    points = parseGpx(e.target.result);
+
+    if (points.length < 2) {
+      alert("GPXポイントが少なすぎます");
+      return;
+    }
+
+    setupRoute();
+
+    playerIndex = 0;
+    hp = 1000;
+    message = "";
+    messageTimer = 0;
+    running = true;
+  };
+
+  reader.readAsText(file);
+}
+
+function loadSample() {
+  fetch("sample.gpx")
+    .then(res => {
+      if (!res.ok) {
+        throw new Error("sample.gpx が見つかりません");
+      }
+      return res.text();
+    })
+    .then(text => {
+      points = parseGpx(text);
+
+      if (points.length < 2) {
+        alert("サンプルGPXが不正です");
+        return;
+      }
+
+      setupRoute();
+
+      playerIndex = 0;
+      hp = 1000;
+      message = "";
+      messageTimer = 0;
+      running = true;
+    })
+    .catch(err => {
+      alert("サンプルGPXを読み込めません: " + err.message);
+      console.error(err);
+    });
+}
+loop();
+
+window.onload = () => {
+  updateZoomOptions();
+  loadSample();
+};
+
+</script>
+
+</body>
+</html>
