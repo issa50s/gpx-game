@@ -31,18 +31,28 @@ select, button, input {
 <div class="controls">
   <input type="file" id="gpxFile" accept=".gpx">
 
-  <select id="mapSelect">
-    <option value="std">標準地図</option>
-    <option value="sekishoku" selected>赤色立体地図</option>
-  </select>
+<select id="mapSelect">
+  <option value="std">標準地図</option>
+  <option value="sekishoku" selected>赤色立体地図</option>
+  <option value="photo">航空写真</option>
+</-- <option value="rapid">迅速測図</option> -->
+</select>
 
-  <select id="speedSelect">
-    <option value="3.0">かなり速い</option>
-    <option value="2.0" selected>速い</option>
-    <option value="1.0">普通</option>
-    <option value="0.6">ゆっくり</option>
-    <option value="0.2">観察モード</option>
-  </select>
+<select id="zoomSelect">
+  <option value="12">ズーム12 広域</option>
+  <option value="13" selected>ズーム13 標準</option>
+  <option value="14">ズーム14 詳細</option>
+  <option value="15">ズーム15 かなり詳細</option>
+  <option value="16">ズーム16 超詳細</option>
+</select>
+
+<select id="speedSelect">
+  <option value="3.0">かなり速い</option>
+  <option value="2.0" selected>速い</option>
+  <option value="1.0">普通</option>
+  <option value="0.6">ゆっくり</option>
+  <option value="0.2">観察モード</option>
+</select>
 
   <button onclick="startGame()">START</button>
   <button onclick="loadSample()">サンプル再生</button>
@@ -60,7 +70,7 @@ const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
 
 // 赤色立体地図は13〜14くらいが安定しやすい
-const ZOOM = 13;
+let ZOOM = 13;
 
 const PLAYER_SPEED = 1;
 
@@ -82,13 +92,20 @@ let dynamicSpeed = 1;
 document.getElementById("mapSelect").addEventListener("change", e => {
   TILE_TYPE = e.target.value;
 
-  // 地図タイルを切り替えるためキャッシュをクリア
   Object.keys(tileCache).forEach(k => delete tileCache[k]);
+
+  updateZoomOptions();
+
+  if (points.length >= 2) {
+    setupRoute();   // ←これ追加（重要）
+  }
 });
 
 document.getElementById("speedSelect").addEventListener("change", e => {
   speedScale = parseFloat(e.target.value);
 });
+
+  updateZoomOptions(); // ←これ追加
 
 document.addEventListener("keydown", e => {
   if (e.code === "Space") spacePressed = true;
@@ -101,10 +118,56 @@ document.addEventListener("keyup", e => {
 function getTileUrl() {
   if (TILE_TYPE === "std") {
     return "https://cyberjapandata.gsi.go.jp/xyz/std/{z}/{x}/{y}.png";
-  } else {
+  } else if (TILE_TYPE === "sekishoku") {
     return "https://cyberjapandata.gsi.go.jp/xyz/sekishoku/{z}/{x}/{y}.png";
+  } else if (TILE_TYPE === "photo") {
+    return "https://cyberjapandata.gsi.go.jp/xyz/seamlessphoto/{z}/{x}/{y}.jpg";
+//  } else if (TILE_TYPE === "rapid") {
+//    return "https://aginfo.cgk.affrc.go.jp/ws/tmc/1.0.0/Kanto_Rapid-900913-L/{z}/{x}/{y}.png";
   }
 }
+
+function updateZoomOptions() {
+  const zoomSelect = document.getElementById("zoomSelect");
+
+  for (let option of zoomSelect.options) {
+    const z = parseInt(option.value);
+
+    if (TILE_TYPE === "sekishoku") {
+      // 赤色立体 → 14まで
+      option.disabled = (z > 14 || z < 12);
+    } else {
+      // 標準・航空写真 → 12〜16のみ
+      option.disabled = (z < 12 || z > 16);
+    }
+  }
+
+  // 範囲外なら強制補正
+  if (TILE_TYPE === "sekishoku" && ZOOM > 14) {
+    ZOOM = 14;
+    zoomSelect.value = "14";
+  }
+
+  if ((TILE_TYPE === "std" || TILE_TYPE === "photo") && ZOOM < 12) {
+    ZOOM = 12;
+    zoomSelect.value = "12";
+  }
+
+  if ((TILE_TYPE === "std" || TILE_TYPE === "photo") && ZOOM > 16) {
+    ZOOM = 16;
+    zoomSelect.value = "16";
+  }
+}
+
+document.getElementById("zoomSelect").addEventListener("change", e => {
+  ZOOM = parseInt(e.target.value);
+
+  Object.keys(tileCache).forEach(k => delete tileCache[k]);
+
+  if (points.length >= 2) {
+    setupRoute();
+  }
+});
 
 function formatTime(date) {
   if (!date) return "--:--:--";
@@ -427,6 +490,7 @@ function startGame() {
 
   TILE_TYPE = document.getElementById("mapSelect").value;
   speedScale = parseFloat(document.getElementById("speedSelect").value);
+  ZOOM = parseInt(document.getElementById("zoomSelect").value);
 
   Object.keys(tileCache).forEach(k => delete tileCache[k]);
 
@@ -484,6 +548,7 @@ function loadSample() {
 loop();
 
 window.onload = () => {
+  updateZoomOptions();
   loadSample();
 };
 
