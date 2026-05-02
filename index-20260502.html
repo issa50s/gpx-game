@@ -517,10 +517,10 @@ function startGame() {
 }
 
 function loadSample() {
-  fetch("sample.gpx")
+  fetch("20260502.gpx")
     .then(res => {
       if (!res.ok) {
-        throw new Error("sample.gpx が見つかりません");
+        throw new Error("20260502.gpx が見つかりません");
       }
       return res.text();
     })
