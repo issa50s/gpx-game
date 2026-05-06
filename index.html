@@ -2,7 +2,8 @@
 <html lang="ja">
 <head>
 <meta charset="UTF-8">
-<title>GPX追体験ゲーム HTML版</title>
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>GPX追体験ビューア― HTML版</title>
 <style>
 body {
   margin: 0;
@@ -14,6 +15,48 @@ body {
 canvas {
   border: 2px solid #333;
   background: #222;
+  width: 1000px;
+  height: 800px;
+  max-width: 100%;
+  touch-action: manipulation;
+  box-sizing: border-box;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  overflow-x: hidden;
+}
+
+@media (max-width: 768px) {
+
+  h2 {
+    font-size: 20px;
+    margin: 10px 0;
+  }
+
+  .controls {
+    width: 100%;
+    padding: 6px;
+  }
+
+  select, button, input {
+    width: 95%;
+    max-width: 420px;
+    font-size: 18px;
+    padding: 10px;
+    margin: 6px auto;
+    display: block;
+  }
+
+  canvas {
+    width: 100vw;
+    height: auto;
+    border-left: none;
+    border-right: none;
+  }
 }
 .controls {
   margin: 10px;
@@ -26,7 +69,7 @@ select, button, input {
 </head>
 <body>
 
-<h2>GPX追体験ゲーム HTML版</h2>
+<h2>GPX追体験ビューアー HTML版</h2>
 
 <div class="controls">
   <input type="file" id="gpxFile" accept=".gpx">
@@ -54,6 +97,13 @@ select, button, input {
   <option value="0.2">観察モード</option>
 </select>
 
+<select id="iconSelect">
+  <option value="🏃" selected>ランナー</option>
+  <option value="🚴">自転車</option>
+  <option value="🚗">自動車</option>
+  <option value="🐎">馬</option>
+</select>
+
   <button onclick="startGame()">START</button>
   <button onclick="loadSample()">サンプル再生</button>
 
@@ -69,6 +119,27 @@ const ctx = canvas.getContext("2d");
 const WIDTH = canvas.width;
 const HEIGHT = canvas.height;
 
+function resizeCanvasDisplay() {
+  const isMobile = window.innerWidth <= 768;
+
+  if (isMobile) {
+    // スマホ表示：画面幅にフィット
+    const displayWidth = window.innerWidth;
+    const displayHeight = displayWidth * 0.8;
+
+    canvas.style.width = displayWidth + "px";
+    canvas.style.height = displayHeight + "px";
+  } else {
+    // PC表示：従来どおり 1000 x 800
+    canvas.style.width = "1000px";
+    canvas.style.height = "800px";
+  }
+}
+
+window.addEventListener("resize", resizeCanvasDisplay);
+window.addEventListener("orientationchange", resizeCanvasDisplay);
+
+
 // 赤色立体地図は13〜14くらいが安定しやすい
 let ZOOM = 13;
 
@@ -82,7 +153,9 @@ let screenPoints = [];
 let events = [];
 
 let playerIndex = 0;
-let hp = 1000;
+let playerIcon = "🏃";
+let cumulativeDistances = [];
+let totalDistanceKm = 0;
 let message = "";
 let messageTimer = 0;
 let running = false;
@@ -103,6 +176,10 @@ document.getElementById("mapSelect").addEventListener("change", e => {
 
 document.getElementById("speedSelect").addEventListener("change", e => {
   speedScale = parseFloat(e.target.value);
+});
+
+document.getElementById("iconSelect").addEventListener("change", e => {
+  playerIcon = e.target.value;
 });
 
   updateZoomOptions(); // ←これ追加
@@ -179,6 +256,31 @@ function formatTime(date) {
   return `${h}:${m}:${s}`;
 }
 
+function calcDistanceKm(p1, p2) {
+  const R = 6371;
+  const lat1 = p1.lat * Math.PI / 180;
+  const lat2 = p2.lat * Math.PI / 180;
+  const dLat = (p2.lat - p1.lat) * Math.PI / 180;
+  const dLon = (p2.lon - p1.lon) * Math.PI / 180;
+
+  const a =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) *
+    Math.sin(dLon / 2) ** 2;
+
+  return R * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function calcCumulativeDistances() {
+  cumulativeDistances = [0];
+
+  for (let i = 1; i < points.length; i++) {
+    cumulativeDistances[i] = cumulativeDistances[i - 1] + calcDistanceKm(points[i - 1], points[i]);
+  }
+
+  totalDistanceKm = cumulativeDistances[cumulativeDistances.length - 1] || 0;
+}
+
 function lonLatToPixel(lon, lat, z) {
   const latRad = lat * Math.PI / 180;
   const n = Math.pow(2, z);
@@ -244,6 +346,8 @@ function parseGpx(text) {
 }
 
 function setupRoute() {
+  calcCumulativeDistances();
+
   screenPoints = points.map(p => {
     return lonLatToPixel(p.lon, p.lat, ZOOM);
   });
@@ -255,19 +359,11 @@ function makeEvents() {
   events = [];
 
   for (let i = 1; i < points.length; i++) {
-    const eleDiff = points[i].ele - points[i - 1].ele;
-
-    if (eleDiff > 5) {
-      events.push({ index: i, message: "登り坂イベント：体力 -1" });
-    } else if (eleDiff < -5) {
-      events.push({ index: i, message: "下り坂イベント：速度注意" });
-    }
-
     if (points[i].time && points[i - 1].time) {
       const dt = (points[i].time - points[i - 1].time) / 1000;
 
       if (dt > 30) {
-        events.push({ index: i, message: "観察イベント：ここで停止しました" });
+        events.push({ index: i, message: "観察ポイント：ここで停止しました" });
       }
     }
   }
@@ -350,19 +446,10 @@ function update() {
       message = e.message;
       messageTimer = 90;
 
-      if (e.message.includes("登り坂")) {
-        hp -= 1;
-      }
     }
   }
 
   if (messageTimer > 0) messageTimer--;
-
-  if (hp <= 0) {
-    running = false;
-    message = "体力切れ……";
-    messageTimer = 9999;
-  }
 
   if (playerIndex >= screenPoints.length - 1) {
     running = false;
@@ -434,18 +521,20 @@ function draw() {
   ctx.font = "28px sans-serif";
   ctx.textAlign = "center";
   ctx.textBaseline = "middle";
-  ctx.fillText("🏃", pp.x, pp.y);
+  ctx.fillText(playerIcon, pp.x, pp.y);
 
   // UI
   ctx.fillStyle = "rgba(0,0,0,0.2)";
-  ctx.fillRect(10, 10, 320, 135);
+  ctx.fillRect(10, 10, 360, 135);
 
   const progress = Math.floor(playerIndex / (screenPoints.length - 1) * 100);
   const i = Math.floor(playerIndex);
   const currentTime = points[i]?.time;
 
+  const currentDistanceKm = cumulativeDistances[i] || 0;
+
   drawText(`進行率: ${progress}%`, 25, 40);
-  drawText(`体力: ${hp}`, 25, 70);
+  drawText(`走行距離: ${currentDistanceKm.toFixed(2)} / ${totalDistanceKm.toFixed(2)} km`, 25, 70);
   drawText("SPACE長押し：停止", 25, 100);
   drawText(`時刻: ${formatTime(currentTime)}`, 25, 130, 22, "white");
 
@@ -465,7 +554,7 @@ function loop() {
 }
 
 function loadSample() {
-  fetch("sample.gpx")
+  fetch("20260502.gpx")
     .then(res => res.text())
     .then(text => {
       points = parseGpx(text);
@@ -473,7 +562,7 @@ function loadSample() {
       setupRoute();
 
       playerIndex = 0;
-      hp = 1000;
+      playerIcon = document.getElementById("iconSelect").value;
       message = "";
       messageTimer = 0;
       running = true;
@@ -490,6 +579,7 @@ function startGame() {
 
   TILE_TYPE = document.getElementById("mapSelect").value;
   speedScale = parseFloat(document.getElementById("speedSelect").value);
+  playerIcon = document.getElementById("iconSelect").value;
   ZOOM = parseInt(document.getElementById("zoomSelect").value);
 
   Object.keys(tileCache).forEach(k => delete tileCache[k]);
@@ -507,7 +597,7 @@ function startGame() {
     setupRoute();
 
     playerIndex = 0;
-    hp = 1000;
+    playerIcon = document.getElementById("iconSelect").value;
     message = "";
     messageTimer = 0;
     running = true;
@@ -517,10 +607,10 @@ function startGame() {
 }
 
 function loadSample() {
-  fetch("sample.gpx")
+  fetch("20260502.gpx")
     .then(res => {
       if (!res.ok) {
-        throw new Error("sample.gpx が見つかりません");
+        throw new Error("20260502.gpx が見つかりません");
       }
       return res.text();
     })
@@ -535,7 +625,7 @@ function loadSample() {
       setupRoute();
 
       playerIndex = 0;
-      hp = 1000;
+      playerIcon = document.getElementById("iconSelect").value;
       message = "";
       messageTimer = 0;
       running = true;
@@ -545,6 +635,7 @@ function loadSample() {
       console.error(err);
     });
 }
+resizeCanvasDisplay();
 loop();
 
 window.onload = () => {
