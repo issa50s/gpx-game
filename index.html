@@ -33,22 +33,40 @@ body {
 @media (max-width: 768px) {
 
   h2 {
-    font-size: 20px;
-    margin: 10px 0;
+    font-size: 16px;
+    margin: 4px 0;
+    line-height: 1.2;
   }
 
   .controls {
     width: 100%;
-    padding: 6px;
+    padding: 2px 4px;
+    margin: 2px 0;
+    display: flex;
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 3px;
   }
 
   select, button, input {
-    width: 95%;
-    max-width: 420px;
-    font-size: 18px;
-    padding: 10px;
-    margin: 6px auto;
-    display: block;
+    width: auto;
+    max-width: 46vw;
+    font-size: 12px;
+    padding: 4px 6px;
+    margin: 1px;
+    display: inline-block;
+  }
+
+  input[type="file"] {
+    max-width: 92vw;
+    font-size: 11px;
+  }
+
+  .controls p {
+    width: 100%;
+    font-size: 11px;
+    margin: 2px 0;
+    line-height: 1.2;
   }
 
   canvas {
@@ -64,6 +82,21 @@ body {
 select, button, input {
   font-size: 16px;
   margin: 4px;
+}
+
+body.dragover::after {
+  content: "GPXファイルをドロップ";
+  position: fixed;
+  inset: 0;
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: rgba(0,0,0,0.55);
+  color: white;
+  font-size: 32px;
+  font-weight: bold;
+  pointer-events: none;
 }
 </style>
 </head>
@@ -107,7 +140,7 @@ select, button, input {
   <button onclick="startGame()">START</button>
   <button onclick="loadSample()">サンプル再生</button>
 
-  <p>SPACE長押し：停止 / GPXを選んでSTART</p>
+  <p>SPACE長押し：停止 / GPXを選んでSTART / GPXドラッグ＆ドロップ対応</p>
 </div>
 
 <canvas id="game" width="1000" height="800"></canvas>
@@ -125,7 +158,7 @@ function resizeCanvasDisplay() {
   if (isMobile) {
     // スマホ表示：画面幅にフィット
     const displayWidth = window.innerWidth;
-    const displayHeight = displayWidth * 0.8;
+    const displayHeight = displayWidth * 0.9;
 
     canvas.style.width = displayWidth + "px";
     canvas.style.height = displayHeight + "px";
@@ -181,7 +214,6 @@ document.getElementById("speedSelect").addEventListener("change", e => {
 document.getElementById("iconSelect").addEventListener("change", e => {
   playerIcon = e.target.value;
 });
-
   updateZoomOptions(); // ←これ追加
 
 document.addEventListener("keydown", e => {
@@ -569,10 +601,14 @@ function loadSample() {
     });
 }
 
-function startGame() {
-  const file = document.getElementById("gpxFile").files[0];
 
+function loadGpxFromFile(file) {
   if (!file) {
+    alert("GPXファイルを選んでください");
+    return;
+  }
+
+  if (!file.name.toLowerCase().endsWith(".gpx")) {
     alert("GPXファイルを選んでください");
     return;
   }
@@ -604,6 +640,34 @@ function startGame() {
   };
 
   reader.readAsText(file);
+}
+
+document.getElementById("gpxFile").addEventListener("change", e => {
+  const file = e.target.files[0];
+  if (file) loadGpxFromFile(file);
+});
+
+window.addEventListener("dragover", e => {
+  e.preventDefault();
+  document.body.classList.add("dragover");
+});
+
+window.addEventListener("dragleave", e => {
+  document.body.classList.remove("dragover");
+});
+
+window.addEventListener("drop", e => {
+  e.preventDefault();
+  document.body.classList.remove("dragover");
+
+  const file = e.dataTransfer.files[0];
+  loadGpxFromFile(file);
+});
+
+
+function startGame() {
+  const file = document.getElementById("gpxFile").files[0];
+  loadGpxFromFile(file);
 }
 
 function loadSample() {
